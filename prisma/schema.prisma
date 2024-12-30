@@ -30,18 +30,19 @@ model User {
 }
 
 model Message {
-  id          Int          @id @default(autoincrement())
+  id          Int        @id @default(autoincrement())
+  discordId   String     @unique // New field for Discord ID
   userId      String?
-  user        User?        @relation(fields: [userId], references: [id])
+  user        User?      @relation(fields: [userId], references: [id])
   userName    String?
   userTag     String?
   avatarUrl   String?
   isBot       Boolean
   date        DateTime?
   content     String
-  upvotes     Int          @default(0)
+  upvotes     Int        @default(0)
   tier        Tier?
-  
+
   attachments Attachment[] // Relation to Attachment model
   mentions    Mention[]    // Relation to Mention model
 
