@@ -1,4 +1,4 @@
-// index.js
+// src/index.js
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { PrismaClient } = require('@prisma/client');
@@ -107,9 +107,57 @@ client.on('messageCreate', async (message) => {
         content: content,
         upvotes: upvotes,
         tier: null, // Default to 'None' or as per your logic
-        // Attachments and mentions can be handled via separate relations
+        // Attachments and mentions will be handled separately
       },
     });
+
+    // Handle Mentions
+    if (mentions.length > 0) {
+      for (const mention of mentions) {
+        // Upsert the mentioned user to ensure they exist in the User table
+        const mentionedUser = await prisma.user.upsert({
+          where: { id: mention.userId },
+          update: {
+            userName: mention.userName,
+            userTag: mention.userTag,
+            // Optionally, you can update avatarUrl if available
+          },
+          create: {
+            id: mention.userId,
+            userName: mention.userName,
+            userTag: mention.userTag,
+            avatarUrl: null, // Set to null or a default avatar if available
+            isBot: false, // Assuming mentions are of human users
+          },
+        });
+
+        // Create the Mention entry linking to the message and user
+        await prisma.mention.create({
+          data: {
+            messageId: dbMessage.id,
+            userId: mentionedUser.id,
+          },
+        });
+      }
+    }
+
+    // Handle Attachments
+    if (processedAttachments.length > 0) {
+      for (const attachment of processedAttachments) {
+        await prisma.attachment.create({
+          data: {
+            messageId: dbMessage.id,
+            url: attachment.url,
+            filename: attachment.filename,
+            size: attachment.size,
+            contentType: attachment.contentType,
+            proxyUrl: attachment.proxyUrl,
+            height: attachment.height,
+            width: attachment.width,
+          },
+        });
+      }
+    }
 
     logger.info(`Saved message discordId ${dbMessage.discordId} from user ${user.userName}`);
   } catch (error) {
