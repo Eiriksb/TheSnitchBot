@@ -1,4 +1,5 @@
 // src/index.js
+
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { PrismaClient } = require('@prisma/client');
@@ -25,7 +26,7 @@ const client = new Client({
     GatewayIntentBits.Guilds, // For guild-related events
     GatewayIntentBits.GuildMessages, // For message-related events
     GatewayIntentBits.MessageContent, // To read message content
-    // Add more intents if needed, e.g., GuildMembers, GuildPresences
+    GatewayIntentBits.GuildMessageReactions, // To listen to reaction events
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
@@ -70,9 +71,6 @@ client.on('messageCreate', async (message) => {
       });
     });
 
-    // Upvotes can be initialized to 0 or fetched from reactions if implemented
-    const upvotes = 0;
-
     // Determine if the message is from a bot
     const isBot = author.bot;
 
@@ -105,7 +103,7 @@ client.on('messageCreate', async (message) => {
         isBot: user.isBot,
         date: createdAt,
         content: content,
-        upvotes: upvotes,
+        upvotes: 0, // Initialize upvotes to 0
         tier: null, // Default to 'None' or as per your logic
         // Attachments and mentions will be handled separately
       },
@@ -113,7 +111,7 @@ client.on('messageCreate', async (message) => {
 
     // Handle Mentions
     if (mentions.length > 0) {
-      for (const mention of mentions) {
+      const mentionPromises = mentions.map(async (mention) => {
         // Upsert the mentioned user to ensure they exist in the User table
         const mentionedUser = await prisma.user.upsert({
           where: { id: mention.userId },
@@ -132,19 +130,21 @@ client.on('messageCreate', async (message) => {
         });
 
         // Create the Mention entry linking to the message and user
-        await prisma.mention.create({
+        return prisma.mention.create({
           data: {
             messageId: dbMessage.id,
             userId: mentionedUser.id,
           },
         });
-      }
+      });
+
+      await Promise.all(mentionPromises);
     }
 
     // Handle Attachments
     if (processedAttachments.length > 0) {
-      for (const attachment of processedAttachments) {
-        await prisma.attachment.create({
+      const attachmentPromises = processedAttachments.map((attachment) =>
+        prisma.attachment.create({
           data: {
             messageId: dbMessage.id,
             url: attachment.url,
@@ -155,13 +155,105 @@ client.on('messageCreate', async (message) => {
             height: attachment.height,
             width: attachment.width,
           },
-        });
-      }
+        })
+      );
+
+      await Promise.all(attachmentPromises);
     }
 
     logger.info(`Saved message discordId ${dbMessage.discordId} from user ${user.userName}`);
   } catch (error) {
     logger.error(`Error processing message: ${error.message}`);
+  }
+});
+
+// Listen for reaction additions (upvotes)
+client.on('messageReactionAdd', async (reaction, user) => {
+  try {
+    // Ignore reactions from bots
+    if (user.bot) return;
+
+    // Fetch partials if necessary
+    if (reaction.partial) {
+      try {
+        await reaction.fetch();
+      } catch (error) {
+        logger.error('Error fetching reaction:', error);
+        return;
+      }
+    }
+
+    const { message } = reaction;
+
+    // Only consider reactions in the target channel
+    const targetChannelId = '1190989767219875870'; // Replace with your channel ID
+    if (message.channel.id !== targetChannelId) return;
+
+    // Find the corresponding message in the database
+    const dbMessage = await prisma.message.findUnique({
+      where: { discordId: message.id },
+    });
+
+    if (!dbMessage) {
+      logger.warn(`Message with discordId ${message.id} not found in the database.`);
+      return;
+    }
+
+    // Increment the upvotes count
+    await prisma.message.update({
+      where: { id: dbMessage.id },
+      data: { upvotes: dbMessage.upvotes + 1 },
+    });
+
+    logger.info(`Upvote added to message discordId ${dbMessage.discordId}. Total upvotes: ${dbMessage.upvotes + 1}`);
+  } catch (error) {
+    logger.error(`Error handling reaction add: ${error.message}`);
+  }
+});
+
+// Listen for reaction removals (upvotes)
+client.on('messageReactionRemove', async (reaction, user) => {
+  try {
+    // Ignore reactions from bots
+    if (user.bot) return;
+
+    // Fetch partials if necessary
+    if (reaction.partial) {
+      try {
+        await reaction.fetch();
+      } catch (error) {
+        logger.error('Error fetching reaction:', error);
+        return;
+      }
+    }
+
+    const { message } = reaction;
+
+    // Only consider reactions in the target channel
+    const targetChannelId = '1190989767219875870'; // Replace with your channel ID
+    if (message.channel.id !== targetChannelId) return;
+
+    // Find the corresponding message in the database
+    const dbMessage = await prisma.message.findUnique({
+      where: { discordId: message.id },
+    });
+
+    if (!dbMessage) {
+      logger.warn(`Message with discordId ${message.id} not found in the database.`);
+      return;
+    }
+
+    // Decrement the upvotes count, ensuring it doesn't go below 0
+    const newUpvotes = dbMessage.upvotes > 0 ? dbMessage.upvotes - 1 : 0;
+
+    await prisma.message.update({
+      where: { id: dbMessage.id },
+      data: { upvotes: newUpvotes },
+    });
+
+    logger.info(`Upvote removed from message discordId ${dbMessage.discordId}. Total upvotes: ${newUpvotes}`);
+  } catch (error) {
+    logger.error(`Error handling reaction remove: ${error.message}`);
   }
 });
 
